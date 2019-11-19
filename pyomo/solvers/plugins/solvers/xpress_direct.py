@@ -394,22 +394,36 @@ class XpressDirect(DirectSolver):
             self._vars_referenced_by_obj = ComponentSet()
             self._objective = None
 
+        # self._solver_model.objective.set_linear([(i, 0.0) for i in range(len(self._pyomo_var_to_solver_var_map.values()))])
+        # self._solver_model.objective.set_quadratic([[[0], [0]] for i in self._pyomo_var_to_solver_var_map.keys()])
+
         if obj.active is False:
             raise ValueError('Cannot add inactive objective to solver.')
 
         if obj.sense == minimize:
-            sense = self._gurobipy.GRB.MINIMIZE
+            sense = self._xpress.minimize
         elif obj.sense == maximize:
-            sense = self._gurobipy.GRB.MAXIMIZE
+            sense = self._xpress.maximize
         else:
             raise ValueError('Objective sense is not recognized: {0}'.format(obj.sense))
 
-        gurobi_expr, referenced_vars = self._get_expr_from_pyomo_expr(obj.expr, self._max_obj_degree)
+        xpress_expr, referenced_vars = self._get_expr_from_pyomo_expr(obj.expr, self._max_obj_degree)
+        for i in range(len(xpress_expr.q_coefficients)):
+            xpress_expr.q_coefficients[i] *= 2
 
         for var in referenced_vars:
             self._referenced_variables[var] += 1
 
-        self._solver_model.setObjective(gurobi_expr, sense=sense)
+        self._solver_model.chgobjsense(sense)
+        # FIXME: Come back to check this line:
+        # if hasattr(self._solver_model.objective, 'set_offset'):
+        #     self._solver_model.objective.set_offset(xpress_expr.offset)
+        if len(xpress_expr.coefficients) != 0:
+            self._solver_model.chgobj(xpress_expr.variables, xpress_expr.coefficients)
+        if len(xpress_expr.q_coefficients) != 0:
+            self._solver_model.chgmqobj(xpress_expr.q_variables1,
+                                        xpress_expr.q_variables2,
+                                        xpress_expr.q_coefficients)
         self._objective = obj
         self._vars_referenced_by_obj = referenced_vars
 
