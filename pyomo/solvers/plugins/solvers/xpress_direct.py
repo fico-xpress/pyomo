@@ -452,8 +452,10 @@ class XpressDirect(DirectSolver):
 
         xprob = self._solver_model
         status = xprob.getProbStatus()
-
-        if gprob.getAttr(self._gurobipy.GRB.Attr.IsMIP):
+        
+        if cpxprob.get_problem_type() in [cpxprob.problem_type.MILP,
+                                          cpxprob.problem_type.MIQP,
+                                          cpxprob.problem_type.MIQCP]:
             if extract_reduced_costs:
                 logger.warning("Cannot get reduced costs for MIP.")
             if extract_duals:
