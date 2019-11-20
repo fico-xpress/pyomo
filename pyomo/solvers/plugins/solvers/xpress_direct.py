@@ -158,14 +158,14 @@ class XpressDirect(DirectSolver):
         new_expr = _XpressExpr()
         if len(repn.linear_vars) > 0:
             referenced_vars.update(repn.linear_vars)
-            new_expr.variables.extend(self._pyomo_var_to_ndx_map[i] for i in repn.linear_vars)
+            new_expr.variables.extend([self._pyomo_var_to_solver_var_map[i] for i in repn.linear_vars])
             new_expr.coefficients.extend(repn.linear_coefs)
 
         for i, v in enumerate(repn.quadratic_vars):
             x, y = v
             new_expr.q_coefficients.append(repn.quadratic_coefs[i])
-            new_expr.q_variables1.append(self._pyomo_var_to_ndx_map[x])
-            new_expr.q_variables2.append(self._pyomo_var_to_ndx_map[y])
+            new_expr.q_variables1.extend(self._pyomo_var_to_solver_var_map[x])
+            new_expr.q_variables2.extend(self._pyomo_var_to_solver_var_map[y])
             referenced_vars.add(x)
             referenced_vars.add(y)
 
@@ -203,7 +203,7 @@ class XpressDirect(DirectSolver):
             lb = value(var.value)
             ub = value(var.value)
 
-        self._solver_model.addVariable(lb=lb, ub=ub, vartype=vtype, name=varname)
+        self._solver_model.addVariable(self._xpress.var(lb=lb, ub=ub, vartype=vtype, name=varname))
 
         self._pyomo_var_to_solver_var_map[var] = varname
         self._solver_var_to_pyomo_var_map[varname] = var
@@ -378,11 +378,11 @@ class XpressDirect(DirectSolver):
         :return: xpress.continuous or xpress.binary or xpress.integer
         """
         if var.is_binary():
-            vtype = self._xpress.continuous
+            vtype = self._xpress.binary
         elif var.is_integer():
             vtype = self._xpress.integer
         elif var.is_continuous():
-            vtype = self._xpress.binary
+            vtype = self._xpress.continuous
         else:
             raise ValueError('Variable domain type is not recognized for {0}'.format(var.domain))
         return vtype
