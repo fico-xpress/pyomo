@@ -65,6 +65,7 @@ class XpressDirect(DirectSolver):
         self._solver_con_to_pyomo_con_map = ComponentMap()
         self._callback = None
         self._callback_func = None
+        self._wallclock_time = None
 
         self._name = None
         try:
@@ -453,21 +454,213 @@ class XpressDirect(DirectSolver):
         xprob = self._solver_model
         status = xprob.getProbStatus()
         
-        if cpxprob.get_problem_type() in [cpxprob.problem_type.MILP,
-                                          cpxprob.problem_type.MIQP,
-                                          cpxprob.problem_type.MIQCP]:
-            if extract_reduced_costs:
-                logger.warning("Cannot get reduced costs for MIP.")
-            if extract_duals:
-                logger.warning("Cannot get duals for MIP.")
-            extract_reduced_costs = False
-            extract_duals = False
+        # FIXME: Come back to this later.
+        # if cpxprob.get_problem_type() in [cpxprob.problem_type.MILP,
+        #                                   cpxprob.problem_type.MIQP,
+        #                                   cpxprob.problem_type.MIQCP]:
+        #     if extract_reduced_costs:
+        #         logger.warning("Cannot get reduced costs for MIP.")
+        #     if extract_duals:
+        #         logger.warning("Cannot get duals for MIP.")
+        #     extract_reduced_costs = False
+        #     extract_duals = False
 
         self.results = SolverResults()
         soln = Solution()
 
         self.results.solver.name = self._name
-        self.results.solver.wallclock_time = gprob.Runtime
+        self.results.solver.wallclock_time = xprob.attributes.time
+
+#----V------Come back to this-----V-----
+        coltype = []
+        xprob.getcoltype(coltype, 0, xprob.attributes.cols)
+
+        if coltype.count('B') + coltype.count('I') > 0:
+            if status == grb.LOADED:  # problem is loaded, but no solution
+                self.results.solver.status = SolverStatus.aborted
+                self.results.solver.termination_message = "Model is loaded, but no solution information is available."
+                self.results.solver.termination_condition = TerminationCondition.error
+                soln.status = SolutionStatus.unknown
+            elif status == grb.OPTIMAL:  # optimal
+                self.results.solver.status = SolverStatus.ok
+                self.results.solver.termination_message = "Model was solved to optimality (subject to tolerances), " \
+                                                        "and an optimal solution is available."
+                self.results.solver.termination_condition = TerminationCondition.optimal
+                soln.status = SolutionStatus.optimal
+            elif status == grb.INFEASIBLE:
+                self.results.solver.status = SolverStatus.warning
+                self.results.solver.termination_message = "Model was proven to be infeasible"
+                self.results.solver.termination_condition = TerminationCondition.infeasible
+                soln.status = SolutionStatus.infeasible
+            elif status == grb.INF_OR_UNBD:
+                self.results.solver.status = SolverStatus.warning
+                self.results.solver.termination_message = "Problem proven to be infeasible or unbounded."
+                self.results.solver.termination_condition = TerminationCondition.infeasibleOrUnbounded
+                soln.status = SolutionStatus.unsure
+            elif status == grb.UNBOUNDED:
+                self.results.solver.status = SolverStatus.warning
+                self.results.solver.termination_message = "Model was proven to be unbounded."
+                self.results.solver.termination_condition = TerminationCondition.unbounded
+                soln.status = SolutionStatus.unbounded
+            elif status == grb.CUTOFF:
+                self.results.solver.status = SolverStatus.aborted
+                self.results.solver.termination_message = "Optimal objective for model was proven to be worse than the " \
+                                                        "value specified in the Cutoff parameter. No solution " \
+                                                        "information is available."
+                self.results.solver.termination_condition = TerminationCondition.minFunctionValue
+                soln.status = SolutionStatus.unknown
+            elif status == grb.ITERATION_LIMIT:
+                self.results.solver.status = SolverStatus.aborted
+                self.results.solver.termination_message = "Optimization terminated because the total number of simplex " \
+                                                        "iterations performed exceeded the value specified in the " \
+                                                        "IterationLimit parameter."
+                self.results.solver.termination_condition = TerminationCondition.maxIterations
+                soln.status = SolutionStatus.stoppedByLimit
+            elif status == grb.NODE_LIMIT:
+                self.results.solver.status = SolverStatus.aborted
+                self.results.solver.termination_message = "Optimization terminated because the total number of " \
+                                                        "branch-and-cut nodes explored exceeded the value specified " \
+                                                        "in the NodeLimit parameter"
+                self.results.solver.termination_condition = TerminationCondition.maxEvaluations
+                soln.status = SolutionStatus.stoppedByLimit
+            elif status == grb.TIME_LIMIT:
+                self.results.solver.status = SolverStatus.aborted
+                self.results.solver.termination_message = "Optimization terminated because the time expended exceeded " \
+                                                        "the value specified in the TimeLimit parameter."
+                self.results.solver.termination_condition = TerminationCondition.maxTimeLimit
+                soln.status = SolutionStatus.stoppedByLimit
+            elif status == grb.SOLUTION_LIMIT:
+                self.results.solver.status = SolverStatus.aborted
+                self.results.solver.termination_message = "Optimization terminated because the number of solutions found " \
+                                                        "reached the value specified in the SolutionLimit parameter."
+                self.results.solver.termination_condition = TerminationCondition.unknown
+                soln.status = SolutionStatus.stoppedByLimit
+            elif status == grb.INTERRUPTED:
+                self.results.solver.status = SolverStatus.aborted
+                self.results.solver.termination_message = "Optimization was terminated by the user."
+                self.results.solver.termination_condition = TerminationCondition.error
+                soln.status = SolutionStatus.error
+            elif status == grb.NUMERIC:
+                self.results.solver.status = SolverStatus.error
+                self.results.solver.termination_message = "Optimization was terminated due to unrecoverable numerical " \
+                                                        "difficulties."
+                self.results.solver.termination_condition = TerminationCondition.error
+                soln.status = SolutionStatus.error
+            elif status == grb.SUBOPTIMAL:
+                self.results.solver.status = SolverStatus.warning
+                self.results.solver.termination_message = "Unable to satisfy optimality tolerances; a sub-optimal " \
+                                                        "solution is available."
+                self.results.solver.termination_condition = TerminationCondition.other
+                soln.status = SolutionStatus.feasible
+            elif (status is not None) and \
+                (status == getattr(grb,'USER_OBJ_LIMIT',None)):
+                self.results.solver.status = SolverStatus.aborted
+                self.results.solver.termination_message = "User specified an objective limit " \
+                                                        "(a bound on either the best objective " \
+                                                        "or the best bound), and that limit has " \
+                                                        "been reached. Solution is available."
+                self.results.solver.termination_condition = TerminationCondition.other
+                soln.status = SolutionStatus.stoppedByLimit
+            else:
+                self.results.solver.status = SolverStatus.error
+                self.results.solver.termination_message = \
+                    ("Unhandled Gurobi solve status "
+                    "("+str(status)+")")
+                self.results.solver.termination_condition = TerminationCondition.error
+                soln.status = SolutionStatus.error
+        else:
+            if status == grb.LOADED:  # problem is loaded, but no solution
+                self.results.solver.status = SolverStatus.aborted
+                self.results.solver.termination_message = "Model is loaded, but no solution information is available."
+                self.results.solver.termination_condition = TerminationCondition.error
+                soln.status = SolutionStatus.unknown
+            elif status == grb.OPTIMAL:  # optimal
+                self.results.solver.status = SolverStatus.ok
+                self.results.solver.termination_message = "Model was solved to optimality (subject to tolerances), " \
+                                                        "and an optimal solution is available."
+                self.results.solver.termination_condition = TerminationCondition.optimal
+                soln.status = SolutionStatus.optimal
+            elif status == grb.INFEASIBLE:
+                self.results.solver.status = SolverStatus.warning
+                self.results.solver.termination_message = "Model was proven to be infeasible"
+                self.results.solver.termination_condition = TerminationCondition.infeasible
+                soln.status = SolutionStatus.infeasible
+            elif status == grb.INF_OR_UNBD:
+                self.results.solver.status = SolverStatus.warning
+                self.results.solver.termination_message = "Problem proven to be infeasible or unbounded."
+                self.results.solver.termination_condition = TerminationCondition.infeasibleOrUnbounded
+                soln.status = SolutionStatus.unsure
+            elif status == grb.UNBOUNDED:
+                self.results.solver.status = SolverStatus.warning
+                self.results.solver.termination_message = "Model was proven to be unbounded."
+                self.results.solver.termination_condition = TerminationCondition.unbounded
+                soln.status = SolutionStatus.unbounded
+            elif status == grb.CUTOFF:
+                self.results.solver.status = SolverStatus.aborted
+                self.results.solver.termination_message = "Optimal objective for model was proven to be worse than the " \
+                                                        "value specified in the Cutoff parameter. No solution " \
+                                                        "information is available."
+                self.results.solver.termination_condition = TerminationCondition.minFunctionValue
+                soln.status = SolutionStatus.unknown
+            elif status == grb.ITERATION_LIMIT:
+                self.results.solver.status = SolverStatus.aborted
+                self.results.solver.termination_message = "Optimization terminated because the total number of simplex " \
+                                                        "iterations performed exceeded the value specified in the " \
+                                                        "IterationLimit parameter."
+                self.results.solver.termination_condition = TerminationCondition.maxIterations
+                soln.status = SolutionStatus.stoppedByLimit
+            elif status == grb.NODE_LIMIT:
+                self.results.solver.status = SolverStatus.aborted
+                self.results.solver.termination_message = "Optimization terminated because the total number of " \
+                                                        "branch-and-cut nodes explored exceeded the value specified " \
+                                                        "in the NodeLimit parameter"
+                self.results.solver.termination_condition = TerminationCondition.maxEvaluations
+                soln.status = SolutionStatus.stoppedByLimit
+            elif status == grb.TIME_LIMIT:
+                self.results.solver.status = SolverStatus.aborted
+                self.results.solver.termination_message = "Optimization terminated because the time expended exceeded " \
+                                                        "the value specified in the TimeLimit parameter."
+                self.results.solver.termination_condition = TerminationCondition.maxTimeLimit
+                soln.status = SolutionStatus.stoppedByLimit
+            elif status == grb.SOLUTION_LIMIT:
+                self.results.solver.status = SolverStatus.aborted
+                self.results.solver.termination_message = "Optimization terminated because the number of solutions found " \
+                                                        "reached the value specified in the SolutionLimit parameter."
+                self.results.solver.termination_condition = TerminationCondition.unknown
+                soln.status = SolutionStatus.stoppedByLimit
+            elif status == grb.INTERRUPTED:
+                self.results.solver.status = SolverStatus.aborted
+                self.results.solver.termination_message = "Optimization was terminated by the user."
+                self.results.solver.termination_condition = TerminationCondition.error
+                soln.status = SolutionStatus.error
+            elif status == grb.NUMERIC:
+                self.results.solver.status = SolverStatus.error
+                self.results.solver.termination_message = "Optimization was terminated due to unrecoverable numerical " \
+                                                        "difficulties."
+                self.results.solver.termination_condition = TerminationCondition.error
+                soln.status = SolutionStatus.error
+            elif status == grb.SUBOPTIMAL:
+                self.results.solver.status = SolverStatus.warning
+                self.results.solver.termination_message = "Unable to satisfy optimality tolerances; a sub-optimal " \
+                                                        "solution is available."
+                self.results.solver.termination_condition = TerminationCondition.other
+                soln.status = SolutionStatus.feasible
+            elif (status is not None) and \
+                (status == getattr(grb,'USER_OBJ_LIMIT',None)):
+                self.results.solver.status = SolverStatus.aborted
+                self.results.solver.termination_message = "User specified an objective limit " \
+                                                        "(a bound on either the best objective " \
+                                                        "or the best bound), and that limit has " \
+                                                        "been reached. Solution is available."
+                self.results.solver.termination_condition = TerminationCondition.other
+                soln.status = SolutionStatus.stoppedByLimit
+            else:
+                self.results.solver.status = SolverStatus.error
+                self.results.solver.termination_message = \
+                    ("Unhandled Gurobi solve status "
+                    "("+str(status)+")")
+                self.results.solver.termination_condition = TerminationCondition.error
+                soln.status = SolutionStatus.error
 
         if status == grb.LOADED:  # problem is loaded, but no solution
             self.results.solver.status = SolverStatus.aborted
@@ -545,7 +738,6 @@ class XpressDirect(DirectSolver):
                                                       "solution is available."
             self.results.solver.termination_condition = TerminationCondition.other
             soln.status = SolutionStatus.feasible
-        # note that USER_OBJ_LIMIT was added in Gurobi 7.0, so it may not be present
         elif (status is not None) and \
              (status == getattr(grb,'USER_OBJ_LIMIT',None)):
             self.results.solver.status = SolverStatus.aborted
@@ -563,64 +755,54 @@ class XpressDirect(DirectSolver):
             self.results.solver.termination_condition = TerminationCondition.error
             soln.status = SolutionStatus.error
 
-        self.results.problem.name = gprob.ModelName
+#-----^-----Come back to this-----^-----
 
-        if gprob.ModelSense == 1:
+        self.results.problem.name = xprob.name()
+
+        if xprob.attributes.objsense == 1:
             self.results.problem.sense = minimize
-        elif gprob.ModelSense == -1:
+        elif xprob.attributes.objsense == -1:
             self.results.problem.sense = maximize
         else:
-            raise RuntimeError('Unrecognized gurobi objective sense: {0}'.format(gprob.ModelSense))
+            raise RuntimeError('Unrecognized xpress objective sense: {0}'.format(xprob.attributes.objsense))
+
+        
+        self.results.problem.number_of_constraints = xprob.attributes.rows
+        self.results.problem.number_of_nonzeros = xprob.attributes.elems
+        self.results.problem.number_of_variables = xprob.attributes.cols
+        self.results.problem.number_of_binary_variables = coltype.count('B')
+        self.results.problem.number_of_integer_variables = coltype.count('I')
+        self.results.problem.number_of_continuous_variables = coltype.count('C')
+        self.results.problem.number_of_objectives = 1
+        self.results.problem.number_of_solutions = gprob.SolCount
 
         self.results.problem.upper_bound = None
         self.results.problem.lower_bound = None
-        if (gprob.NumBinVars + gprob.NumIntVars) == 0:
-            try:
-                self.results.problem.upper_bound = gprob.ObjVal
-                self.results.problem.lower_bound = gprob.ObjVal
-            except (self._gurobipy.GurobiError, AttributeError):
-                pass
-        elif gprob.ModelSense == 1:  # minimizing
-            try:
-                self.results.problem.upper_bound = gprob.ObjVal
-            except (self._gurobipy.GurobiError, AttributeError):
-                pass
-            try:
-                self.results.problem.lower_bound = gprob.ObjBound
-            except (self._gurobipy.GurobiError, AttributeError):
-                pass
-        elif gprob.ModelSense == -1:  # maximizing
-            try:
-                self.results.problem.upper_bound = gprob.ObjBound
-            except (self._gurobipy.GurobiError, AttributeError):
-                pass
-            try:
-                self.results.problem.lower_bound = gprob.ObjVal
-            except (self._gurobipy.GurobiError, AttributeError):
-                pass
+        if (self.results.problem.number_of_binary_variables + self.results.problem.number_of_integer_variables) == 0:
+            self.results.problem.upper_bound = xprob.getObjVal()
+            self.results.problem.lower_bound = xprob.getObjVal()
+        elif xprob.attributes.objsense == 1:  # minimizing
+            self.results.problem.upper_bound = xprob.getObjVal()
+            self.results.problem.lower_bound = xprob.attributes.mipbestobjval
+        elif xprob.attributes.objsense == -1:  # maximizing
+            self.results.problem.upper_bound = xprob.attributes.mipbestobjval
+            self.results.problem.lower_bound = xprob.getObjVal()
         else:
-            raise RuntimeError('Unrecognized gurobi objective sense: {0}'.format(gprob.ModelSense))
+            raise RuntimeError('Unrecognized xpress objective sense: {0}'.format(xprob.attributes.objsense))
 
         try:
             soln.gap = self.results.problem.upper_bound - self.results.problem.lower_bound
         except TypeError:
             soln.gap = None
 
-        self.results.problem.number_of_constraints = gprob.NumConstrs + gprob.NumQConstrs + gprob.NumSOS
-        self.results.problem.number_of_nonzeros = gprob.NumNZs
-        self.results.problem.number_of_variables = gprob.NumVars
-        self.results.problem.number_of_binary_variables = gprob.NumBinVars
-        self.results.problem.number_of_integer_variables = gprob.NumIntVars
-        self.results.problem.number_of_continuous_variables = gprob.NumVars - gprob.NumIntVars - gprob.NumBinVars
-        self.results.problem.number_of_objectives = 1
-        self.results.problem.number_of_solutions = gprob.SolCount
+        
 
         # if a solve was stopped by a limit, we still need to check to
         # see if there is a solution available - this may not always
         # be the case, both in LP and MIP contexts.
         if self._save_results:
             """
-            This code in this if statement is only needed for backwards compatability. It is more efficient to set
+            This code in this if statement is only needed for backwards compatibility. It is more efficient to set
             _save_results to False and use load_vars, load_duals, etc.
             """
             if gprob.SolCount > 0:
