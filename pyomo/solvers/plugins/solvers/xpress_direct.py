@@ -453,17 +453,21 @@ class XpressDirect(DirectSolver):
 
         xprob = self._solver_model
         status = xprob.getProbStatus()
+
+        coltype = []
+        xprob.getcoltype(coltype, 0, xprob.attributes.cols)
+        if coltype.count('B')+coltype.count('I') > 0:
+            problemtype = 'MIP'
+        else:
+            problemtype = 'LP'
         
-        # FIXME: Come back to this later.
-        # if cpxprob.get_problem_type() in [cpxprob.problem_type.MILP,
-        #                                   cpxprob.problem_type.MIQP,
-        #                                   cpxprob.problem_type.MIQCP]:
-        #     if extract_reduced_costs:
-        #         logger.warning("Cannot get reduced costs for MIP.")
-        #     if extract_duals:
-        #         logger.warning("Cannot get duals for MIP.")
-        #     extract_reduced_costs = False
-        #     extract_duals = False
+        if problemtype == 'MIP':
+            if extract_reduced_costs:
+                logger.warning("Cannot get reduced costs for MIP.")
+            if extract_duals:
+                logger.warning("Cannot get duals for MIP.")
+            extract_reduced_costs = False
+            extract_duals = False
 
         self.results = SolverResults()
         soln = Solution()
@@ -471,291 +475,113 @@ class XpressDirect(DirectSolver):
         self.results.solver.name = self._name
         self.results.solver.wallclock_time = xprob.attributes.time
 
-#----V------Come back to this-----V-----
-        coltype = []
-        xprob.getcoltype(coltype, 0, xprob.attributes.cols)
-
-        if coltype.count('B') + coltype.count('I') > 0:
-            if status == grb.LOADED:  # problem is loaded, but no solution
+        if problemtype == 'MIP':
+            if status == 0:  # problem is loaded, but no solution
                 self.results.solver.status = SolverStatus.aborted
-                self.results.solver.termination_message = "Model is loaded, but no solution information is available."
+                self.results.solver.termination_message = "Problem has not been loaded."
                 self.results.solver.termination_condition = TerminationCondition.error
                 soln.status = SolutionStatus.unknown
-            elif status == grb.OPTIMAL:  # optimal
+            elif status == 1: 
+                self.results.solver.status = SolverStatus.aborted
+                self.results.solver.termination_message = "Global search incomplete - the initial continuous relaxation has not "\
+                                                        "been solved and no integer solution has been found."
+                self.results.solver.termination_condition = TerminationCondition.error
+                soln.status = SolutionStatus.unknown
+            elif status == 2: 
+                self.results.solver.status = SolverStatus.aborted
+                self.results.solver.termination_message = "Global search incomplete - the initial continuous relaxation has "\
+                                                        "been solved and no integer solution has been found."
+                self.results.solver.termination_condition = TerminationCondition.error
+                soln.status = SolutionStatus.unknown
+            elif status == 3: 
+                self.results.solver.status = SolverStatus.aborted
+                self.results.solver.termination_message = "Global search incomplete - no integer solution found."
+                self.results.solver.termination_condition = TerminationCondition.error
+                soln.status = SolutionStatus.unknown
+            elif status == 4: 
+                self.results.solver.status = SolverStatus.aborted
+                self.results.solver.termination_message = "Global search incomplete - as integer solution has been found."
+                self.results.solver.termination_condition = TerminationCondition.error
+                soln.status = SolutionStatus.unknown
+            elif status == 5:
+                self.results.solver.status = SolverStatus.warning
+                self.results.solver.termination_message = "Global search complete - no integer solution found."
+                self.results.solver.termination_condition = TerminationCondition.infeasible
+                soln.status = SolutionStatus.infeasible
+            elif status == 6:  # optimal
+                self.results.solver.status = SolverStatus.ok
+                self.results.solver.termination_message = "Global search complete - integer solution found."
+                self.results.solver.termination_condition = TerminationCondition.optimal
+                soln.status = SolutionStatus.optimal
+            elif status == 7:
+                self.results.solver.status = SolverStatus.warning
+                self.results.solver.termination_message = "Global search incomplete - the initial continuous relaxation"\
+                                                        "was found to be unbounded. A solution may have been found."
+                self.results.solver.termination_condition = TerminationCondition.unbounded
+                soln.status = SolutionStatus.unbounded
+            else:
+                self.results.solver.status = SolverStatus.error
+                self.results.solver.termination_message = \
+                    ("Unhandled Xpress solve status "
+                    "("+str(status)+")")
+                self.results.solver.termination_condition = TerminationCondition.error
+                soln.status = SolutionStatus.error
+        elif problemtype == 'LP':
+            if status == 0:  # problem is loaded, but no solution
+                self.results.solver.status = SolverStatus.aborted
+                self.results.solver.termination_message = "Optimization is unstarted."
+                self.results.solver.termination_condition = TerminationCondition.error
+                soln.status = SolutionStatus.unknown
+            elif status == 1:  # optimal
                 self.results.solver.status = SolverStatus.ok
                 self.results.solver.termination_message = "Model was solved to optimality (subject to tolerances), " \
                                                         "and an optimal solution is available."
                 self.results.solver.termination_condition = TerminationCondition.optimal
                 soln.status = SolutionStatus.optimal
-            elif status == grb.INFEASIBLE:
+            elif status == 2:
                 self.results.solver.status = SolverStatus.warning
-                self.results.solver.termination_message = "Model was proven to be infeasible"
+                self.results.solver.termination_message = "Model was proven to be infeasible."
                 self.results.solver.termination_condition = TerminationCondition.infeasible
                 soln.status = SolutionStatus.infeasible
-            elif status == grb.INF_OR_UNBD:
-                self.results.solver.status = SolverStatus.warning
-                self.results.solver.termination_message = "Problem proven to be infeasible or unbounded."
-                self.results.solver.termination_condition = TerminationCondition.infeasibleOrUnbounded
-                soln.status = SolutionStatus.unsure
-            elif status == grb.UNBOUNDED:
+            elif status == 3:
+                self.results.solver.status = SolverStatus.aborted
+                self.results.solver.termination_message = "Optimal objective for model was proven to be worse than the " \
+                                                        "value specified in the Cutoff parameter."
+                self.results.solver.termination_condition = TerminationCondition.minFunctionValue
+                soln.status = SolutionStatus.unknown
+            elif status == 4:
+                self.results.solver.status = SolverStatus.aborted
+                self.results.solver.termination_message = "Optimization is unfinished."
+                self.results.solver.termination_condition = TerminationCondition.error
+                soln.status = SolutionStatus.error
+            elif status == 5:
                 self.results.solver.status = SolverStatus.warning
                 self.results.solver.termination_message = "Model was proven to be unbounded."
                 self.results.solver.termination_condition = TerminationCondition.unbounded
                 soln.status = SolutionStatus.unbounded
-            elif status == grb.CUTOFF:
+            elif status == 6:
                 self.results.solver.status = SolverStatus.aborted
-                self.results.solver.termination_message = "Optimal objective for model was proven to be worse than the " \
-                                                        "value specified in the Cutoff parameter. No solution " \
-                                                        "information is available."
+                self.results.solver.termination_message = "Cutoff in dual."
                 self.results.solver.termination_condition = TerminationCondition.minFunctionValue
                 soln.status = SolutionStatus.unknown
-            elif status == grb.ITERATION_LIMIT:
-                self.results.solver.status = SolverStatus.aborted
-                self.results.solver.termination_message = "Optimization terminated because the total number of simplex " \
-                                                        "iterations performed exceeded the value specified in the " \
-                                                        "IterationLimit parameter."
-                self.results.solver.termination_condition = TerminationCondition.maxIterations
-                soln.status = SolutionStatus.stoppedByLimit
-            elif status == grb.NODE_LIMIT:
-                self.results.solver.status = SolverStatus.aborted
-                self.results.solver.termination_message = "Optimization terminated because the total number of " \
-                                                        "branch-and-cut nodes explored exceeded the value specified " \
-                                                        "in the NodeLimit parameter"
-                self.results.solver.termination_condition = TerminationCondition.maxEvaluations
-                soln.status = SolutionStatus.stoppedByLimit
-            elif status == grb.TIME_LIMIT:
-                self.results.solver.status = SolverStatus.aborted
-                self.results.solver.termination_message = "Optimization terminated because the time expended exceeded " \
-                                                        "the value specified in the TimeLimit parameter."
-                self.results.solver.termination_condition = TerminationCondition.maxTimeLimit
-                soln.status = SolutionStatus.stoppedByLimit
-            elif status == grb.SOLUTION_LIMIT:
-                self.results.solver.status = SolverStatus.aborted
-                self.results.solver.termination_message = "Optimization terminated because the number of solutions found " \
-                                                        "reached the value specified in the SolutionLimit parameter."
-                self.results.solver.termination_condition = TerminationCondition.unknown
-                soln.status = SolutionStatus.stoppedByLimit
-            elif status == grb.INTERRUPTED:
-                self.results.solver.status = SolverStatus.aborted
-                self.results.solver.termination_message = "Optimization was terminated by the user."
-                self.results.solver.termination_condition = TerminationCondition.error
-                soln.status = SolutionStatus.error
-            elif status == grb.NUMERIC:
+            elif status == 7:
                 self.results.solver.status = SolverStatus.error
-                self.results.solver.termination_message = "Optimization was terminated due to unrecoverable numerical " \
-                                                        "difficulties."
+                self.results.solver.termination_message = "Problem could not be solved due to numerical issues."
                 self.results.solver.termination_condition = TerminationCondition.error
                 soln.status = SolutionStatus.error
-            elif status == grb.SUBOPTIMAL:
-                self.results.solver.status = SolverStatus.warning
-                self.results.solver.termination_message = "Unable to satisfy optimality tolerances; a sub-optimal " \
-                                                        "solution is available."
-                self.results.solver.termination_condition = TerminationCondition.other
-                soln.status = SolutionStatus.feasible
-            elif (status is not None) and \
-                (status == getattr(grb,'USER_OBJ_LIMIT',None)):
-                self.results.solver.status = SolverStatus.aborted
-                self.results.solver.termination_message = "User specified an objective limit " \
-                                                        "(a bound on either the best objective " \
-                                                        "or the best bound), and that limit has " \
-                                                        "been reached. Solution is available."
-                self.results.solver.termination_condition = TerminationCondition.other
-                soln.status = SolutionStatus.stoppedByLimit
+            elif status == 8:
+                self.results.solver.status = SolverStatus.error
+                self.results.solver.termination_message = "Problem contains quadratic data, which is not convex."
+                self.results.solver.termination_condition = TerminationCondition.error
+                soln.status = SolutionStatus.error
             else:
                 self.results.solver.status = SolverStatus.error
                 self.results.solver.termination_message = \
-                    ("Unhandled Gurobi solve status "
-                    "("+str(status)+")")
-                self.results.solver.termination_condition = TerminationCondition.error
-                soln.status = SolutionStatus.error
-        else:
-            if status == grb.LOADED:  # problem is loaded, but no solution
-                self.results.solver.status = SolverStatus.aborted
-                self.results.solver.termination_message = "Model is loaded, but no solution information is available."
-                self.results.solver.termination_condition = TerminationCondition.error
-                soln.status = SolutionStatus.unknown
-            elif status == grb.OPTIMAL:  # optimal
-                self.results.solver.status = SolverStatus.ok
-                self.results.solver.termination_message = "Model was solved to optimality (subject to tolerances), " \
-                                                        "and an optimal solution is available."
-                self.results.solver.termination_condition = TerminationCondition.optimal
-                soln.status = SolutionStatus.optimal
-            elif status == grb.INFEASIBLE:
-                self.results.solver.status = SolverStatus.warning
-                self.results.solver.termination_message = "Model was proven to be infeasible"
-                self.results.solver.termination_condition = TerminationCondition.infeasible
-                soln.status = SolutionStatus.infeasible
-            elif status == grb.INF_OR_UNBD:
-                self.results.solver.status = SolverStatus.warning
-                self.results.solver.termination_message = "Problem proven to be infeasible or unbounded."
-                self.results.solver.termination_condition = TerminationCondition.infeasibleOrUnbounded
-                soln.status = SolutionStatus.unsure
-            elif status == grb.UNBOUNDED:
-                self.results.solver.status = SolverStatus.warning
-                self.results.solver.termination_message = "Model was proven to be unbounded."
-                self.results.solver.termination_condition = TerminationCondition.unbounded
-                soln.status = SolutionStatus.unbounded
-            elif status == grb.CUTOFF:
-                self.results.solver.status = SolverStatus.aborted
-                self.results.solver.termination_message = "Optimal objective for model was proven to be worse than the " \
-                                                        "value specified in the Cutoff parameter. No solution " \
-                                                        "information is available."
-                self.results.solver.termination_condition = TerminationCondition.minFunctionValue
-                soln.status = SolutionStatus.unknown
-            elif status == grb.ITERATION_LIMIT:
-                self.results.solver.status = SolverStatus.aborted
-                self.results.solver.termination_message = "Optimization terminated because the total number of simplex " \
-                                                        "iterations performed exceeded the value specified in the " \
-                                                        "IterationLimit parameter."
-                self.results.solver.termination_condition = TerminationCondition.maxIterations
-                soln.status = SolutionStatus.stoppedByLimit
-            elif status == grb.NODE_LIMIT:
-                self.results.solver.status = SolverStatus.aborted
-                self.results.solver.termination_message = "Optimization terminated because the total number of " \
-                                                        "branch-and-cut nodes explored exceeded the value specified " \
-                                                        "in the NodeLimit parameter"
-                self.results.solver.termination_condition = TerminationCondition.maxEvaluations
-                soln.status = SolutionStatus.stoppedByLimit
-            elif status == grb.TIME_LIMIT:
-                self.results.solver.status = SolverStatus.aborted
-                self.results.solver.termination_message = "Optimization terminated because the time expended exceeded " \
-                                                        "the value specified in the TimeLimit parameter."
-                self.results.solver.termination_condition = TerminationCondition.maxTimeLimit
-                soln.status = SolutionStatus.stoppedByLimit
-            elif status == grb.SOLUTION_LIMIT:
-                self.results.solver.status = SolverStatus.aborted
-                self.results.solver.termination_message = "Optimization terminated because the number of solutions found " \
-                                                        "reached the value specified in the SolutionLimit parameter."
-                self.results.solver.termination_condition = TerminationCondition.unknown
-                soln.status = SolutionStatus.stoppedByLimit
-            elif status == grb.INTERRUPTED:
-                self.results.solver.status = SolverStatus.aborted
-                self.results.solver.termination_message = "Optimization was terminated by the user."
-                self.results.solver.termination_condition = TerminationCondition.error
-                soln.status = SolutionStatus.error
-            elif status == grb.NUMERIC:
-                self.results.solver.status = SolverStatus.error
-                self.results.solver.termination_message = "Optimization was terminated due to unrecoverable numerical " \
-                                                        "difficulties."
-                self.results.solver.termination_condition = TerminationCondition.error
-                soln.status = SolutionStatus.error
-            elif status == grb.SUBOPTIMAL:
-                self.results.solver.status = SolverStatus.warning
-                self.results.solver.termination_message = "Unable to satisfy optimality tolerances; a sub-optimal " \
-                                                        "solution is available."
-                self.results.solver.termination_condition = TerminationCondition.other
-                soln.status = SolutionStatus.feasible
-            elif (status is not None) and \
-                (status == getattr(grb,'USER_OBJ_LIMIT',None)):
-                self.results.solver.status = SolverStatus.aborted
-                self.results.solver.termination_message = "User specified an objective limit " \
-                                                        "(a bound on either the best objective " \
-                                                        "or the best bound), and that limit has " \
-                                                        "been reached. Solution is available."
-                self.results.solver.termination_condition = TerminationCondition.other
-                soln.status = SolutionStatus.stoppedByLimit
-            else:
-                self.results.solver.status = SolverStatus.error
-                self.results.solver.termination_message = \
-                    ("Unhandled Gurobi solve status "
+                    ("Unhandled Xpress solve status "
                     "("+str(status)+")")
                 self.results.solver.termination_condition = TerminationCondition.error
                 soln.status = SolutionStatus.error
 
-        if status == grb.LOADED:  # problem is loaded, but no solution
-            self.results.solver.status = SolverStatus.aborted
-            self.results.solver.termination_message = "Model is loaded, but no solution information is available."
-            self.results.solver.termination_condition = TerminationCondition.error
-            soln.status = SolutionStatus.unknown
-        elif status == grb.OPTIMAL:  # optimal
-            self.results.solver.status = SolverStatus.ok
-            self.results.solver.termination_message = "Model was solved to optimality (subject to tolerances), " \
-                                                      "and an optimal solution is available."
-            self.results.solver.termination_condition = TerminationCondition.optimal
-            soln.status = SolutionStatus.optimal
-        elif status == grb.INFEASIBLE:
-            self.results.solver.status = SolverStatus.warning
-            self.results.solver.termination_message = "Model was proven to be infeasible"
-            self.results.solver.termination_condition = TerminationCondition.infeasible
-            soln.status = SolutionStatus.infeasible
-        elif status == grb.INF_OR_UNBD:
-            self.results.solver.status = SolverStatus.warning
-            self.results.solver.termination_message = "Problem proven to be infeasible or unbounded."
-            self.results.solver.termination_condition = TerminationCondition.infeasibleOrUnbounded
-            soln.status = SolutionStatus.unsure
-        elif status == grb.UNBOUNDED:
-            self.results.solver.status = SolverStatus.warning
-            self.results.solver.termination_message = "Model was proven to be unbounded."
-            self.results.solver.termination_condition = TerminationCondition.unbounded
-            soln.status = SolutionStatus.unbounded
-        elif status == grb.CUTOFF:
-            self.results.solver.status = SolverStatus.aborted
-            self.results.solver.termination_message = "Optimal objective for model was proven to be worse than the " \
-                                                      "value specified in the Cutoff parameter. No solution " \
-                                                      "information is available."
-            self.results.solver.termination_condition = TerminationCondition.minFunctionValue
-            soln.status = SolutionStatus.unknown
-        elif status == grb.ITERATION_LIMIT:
-            self.results.solver.status = SolverStatus.aborted
-            self.results.solver.termination_message = "Optimization terminated because the total number of simplex " \
-                                                      "iterations performed exceeded the value specified in the " \
-                                                      "IterationLimit parameter."
-            self.results.solver.termination_condition = TerminationCondition.maxIterations
-            soln.status = SolutionStatus.stoppedByLimit
-        elif status == grb.NODE_LIMIT:
-            self.results.solver.status = SolverStatus.aborted
-            self.results.solver.termination_message = "Optimization terminated because the total number of " \
-                                                      "branch-and-cut nodes explored exceeded the value specified " \
-                                                      "in the NodeLimit parameter"
-            self.results.solver.termination_condition = TerminationCondition.maxEvaluations
-            soln.status = SolutionStatus.stoppedByLimit
-        elif status == grb.TIME_LIMIT:
-            self.results.solver.status = SolverStatus.aborted
-            self.results.solver.termination_message = "Optimization terminated because the time expended exceeded " \
-                                                      "the value specified in the TimeLimit parameter."
-            self.results.solver.termination_condition = TerminationCondition.maxTimeLimit
-            soln.status = SolutionStatus.stoppedByLimit
-        elif status == grb.SOLUTION_LIMIT:
-            self.results.solver.status = SolverStatus.aborted
-            self.results.solver.termination_message = "Optimization terminated because the number of solutions found " \
-                                                      "reached the value specified in the SolutionLimit parameter."
-            self.results.solver.termination_condition = TerminationCondition.unknown
-            soln.status = SolutionStatus.stoppedByLimit
-        elif status == grb.INTERRUPTED:
-            self.results.solver.status = SolverStatus.aborted
-            self.results.solver.termination_message = "Optimization was terminated by the user."
-            self.results.solver.termination_condition = TerminationCondition.error
-            soln.status = SolutionStatus.error
-        elif status == grb.NUMERIC:
-            self.results.solver.status = SolverStatus.error
-            self.results.solver.termination_message = "Optimization was terminated due to unrecoverable numerical " \
-                                                      "difficulties."
-            self.results.solver.termination_condition = TerminationCondition.error
-            soln.status = SolutionStatus.error
-        elif status == grb.SUBOPTIMAL:
-            self.results.solver.status = SolverStatus.warning
-            self.results.solver.termination_message = "Unable to satisfy optimality tolerances; a sub-optimal " \
-                                                      "solution is available."
-            self.results.solver.termination_condition = TerminationCondition.other
-            soln.status = SolutionStatus.feasible
-        elif (status is not None) and \
-             (status == getattr(grb,'USER_OBJ_LIMIT',None)):
-            self.results.solver.status = SolverStatus.aborted
-            self.results.solver.termination_message = "User specified an objective limit " \
-                                                      "(a bound on either the best objective " \
-                                                      "or the best bound), and that limit has " \
-                                                      "been reached. Solution is available."
-            self.results.solver.termination_condition = TerminationCondition.other
-            soln.status = SolutionStatus.stoppedByLimit
-        else:
-            self.results.solver.status = SolverStatus.error
-            self.results.solver.termination_message = \
-                ("Unhandled Gurobi solve status "
-                 "("+str(status)+")")
-            self.results.solver.termination_condition = TerminationCondition.error
-            soln.status = SolutionStatus.error
-
-#-----^-----Come back to this-----^-----
 
         self.results.problem.name = xprob.name()
 
