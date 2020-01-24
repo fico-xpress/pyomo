@@ -454,8 +454,9 @@ class XpressDirect(DirectSolver):
         xprob = self._solver_model
         status = xprob.getProbStatus()
 
+        # Identifies problem type via xpress column types
         coltype = []
-        xprob.getcoltype(coltype, 0, xprob.attributes.cols)
+        xprob.getcoltype(coltype, 0, xprob.attributes.cols-1)
         if coltype.count('B')+coltype.count('I') > 0:
             problemtype = 'MIP'
         else:
@@ -600,10 +601,17 @@ class XpressDirect(DirectSolver):
         self.results.problem.number_of_integer_variables = coltype.count('I')
         self.results.problem.number_of_continuous_variables = coltype.count('C')
         self.results.problem.number_of_objectives = 1
-        self.results.problem.number_of_solutions = gprob.SolCount
+        if problemtype == 'MIP':
+            self.results.problem.number_of_solutions = xprob.attributes.mipsols
+        elif problemtype == 'LP' and status == 1:
+            self.results.problem.number_of_solutions = 1
+        else:
+            self.results.problem.number_of_solutions = 0
+            
 
         self.results.problem.upper_bound = None
         self.results.problem.lower_bound = None
+
         if (self.results.problem.number_of_binary_variables + self.results.problem.number_of_integer_variables) == 0:
             self.results.problem.upper_bound = xprob.getObjVal()
             self.results.problem.lower_bound = xprob.getObjVal()
@@ -626,12 +634,13 @@ class XpressDirect(DirectSolver):
         # if a solve was stopped by a limit, we still need to check to
         # see if there is a solution available - this may not always
         # be the case, both in LP and MIP contexts.
+        self._save_results = False #remove this line once _save_results migration is completed
         if self._save_results:
             """
             This code in this if statement is only needed for backwards compatibility. It is more efficient to set
             _save_results to False and use load_vars, load_duals, etc.
             """
-            if gprob.SolCount > 0:
+            if self.results.problem.number_of_solutions > 0:
                 soln_variables = soln.variable
                 soln_constraints = soln.constraint
 
@@ -696,7 +705,7 @@ class XpressDirect(DirectSolver):
                         for val, name in zip(q_vals, q_con_names):
                             soln_constraints[name]["Slack"] = val
         elif self._load_solutions:
-            if gprob.SolCount > 0:
+            if self.results.problem.number_of_solutions > 0:
 
                 self._load_vars()
 
@@ -731,8 +740,8 @@ class XpressDirect(DirectSolver):
         if vars_to_load is None:
             vars_to_load = var_map.keys()
 
-        gurobi_vars_to_load = [var_map[pyomo_var] for pyomo_var in vars_to_load]
-        vals = self._solver_model.getAttr("X", gurobi_vars_to_load)
+        xpress_vars_to_load = [var_map[pyomo_var] for pyomo_var in vars_to_load]
+        vals = self._solver_model.getSolution(xpress_vars_to_load)
 
         for var, val in zip(vars_to_load, vals):
             if ref_vars[var] > 0:
@@ -748,8 +757,8 @@ class XpressDirect(DirectSolver):
         if vars_to_load is None:
             vars_to_load = var_map.keys()
 
-        gurobi_vars_to_load = [var_map[pyomo_var] for pyomo_var in vars_to_load]
-        vals = self._solver_model.getAttr("Rc", gurobi_vars_to_load)
+        xpress_vars_to_load = [var_map[pyomo_var] for pyomo_var in vars_to_load]
+        vals = self._solver_model.getRCost(xpress_vars_to_load)
 
         for var, val in zip(vars_to_load, vals):
             if ref_vars[var] > 0:
