@@ -60,9 +60,9 @@ class XpressDirect(DirectSolver):
             kwds['type'] = 'xpress_direct'
         super(XpressDirect, self).__init__(**kwds)
         self._pyomo_var_to_solver_var_map = ComponentMap()
-        self._solver_var_to_pyomo_var_map = ComponentMap()
-        self._pyomo_con_to_solver_con_map = dict()
-        self._solver_con_to_pyomo_con_map = ComponentMap()
+        self._solver_var_to_pyomo_var_map = dict()
+        self._pyomo_con_to_solver_con_map = ComponentMap()
+        self._solver_con_to_pyomo_con_map = dict()
         self._callback = None
         self._callback_func = None
         self._wallclock_time = None
@@ -214,9 +214,9 @@ class XpressDirect(DirectSolver):
         self._range_constraints = set()
         DirectOrPersistentSolver._set_instance(self, model, kwds)
         self._pyomo_con_to_solver_con_map = dict()
-        self._solver_con_to_pyomo_con_map = ComponentMap()
+        self._solver_con_to_pyomo_con_map = dict()
         self._pyomo_var_to_solver_var_map = ComponentMap()
-        self._solver_var_to_pyomo_var_map = ComponentMap()
+        self._solver_var_to_pyomo_var_map = dict()
         try:
             if model.name is not None:
                 self._solver_model = self._xpress.problem(model.name)
@@ -601,6 +601,7 @@ class XpressDirect(DirectSolver):
         self.results.problem.number_of_integer_variables = coltype.count('I')
         self.results.problem.number_of_continuous_variables = coltype.count('C')
         self.results.problem.number_of_objectives = 1
+        
         if problemtype == 'MIP':
             self.results.problem.number_of_solutions = xprob.attributes.mipsols
         elif problemtype == 'LP' and status == 1:
@@ -635,6 +636,7 @@ class XpressDirect(DirectSolver):
         # see if there is a solution available - this may not always
         # be the case, both in LP and MIP contexts.
         self._save_results = False #remove this line once _save_results migration is completed
+        # self._load_solutions = True
         if self._save_results:
             """
             This code in this if statement is only needed for backwards compatibility. It is more efficient to set
@@ -706,7 +708,6 @@ class XpressDirect(DirectSolver):
                             soln_constraints[name]["Slack"] = val
         elif self._load_solutions:
             if self.results.problem.number_of_solutions > 0:
-
                 self._load_vars()
 
                 if extract_reduced_costs:
@@ -730,9 +731,24 @@ class XpressDirect(DirectSolver):
         return True
 
     def _warm_start(self):
-        for pyomo_var, xpress_var in self._pyomo_var_to_solver_var_map.items():
+        xprob = self._solver_model
+
+        coltype = []
+        xprob.getcoltype(coltype, 0, xprob.attributes.cols-1)
+        if coltype.count('B')+coltype.count('I') > 0:
+            problemtype = 'MIP'
+        else:
+            problemtype = 'LP'
+
+        var_values = []
+        for pyomo_var, _ in self._pyomo_var_to_solver_var_map.items():
             if pyomo_var.value is not None:
-                xpress_var.setAttr(self._gurobipy.GRB.Attr.Start, value(pyomo_var))
+                var_values.append(value(pyomo_var))
+                
+        if problemtype == 'LP':
+            self._solver_model.loadlpsol(var_values)
+        elif problemtype == 'MIP':
+            self._solver_model.loadmipsol(var_values)
 
     def _load_vars(self, vars_to_load=None):
         var_map = self._pyomo_var_to_solver_var_map
@@ -772,25 +788,18 @@ class XpressDirect(DirectSolver):
         dual = self._pyomo_model.dual
 
         if cons_to_load is None:
-            linear_cons_to_load = self._solver_model.getConstrs()
-            if self._version_major >= 5:
-                quadratic_cons_to_load = self._solver_model.getQConstrs()
+            linear_cons_to_load = self._solver_model.getConstraint()
+            linear_cons_to_load_to_str = [str(i) for i in linear_cons_to_load]
         else:
-            gurobi_cons_to_load = set([con_map[pyomo_con] for pyomo_con in cons_to_load])
-            linear_cons_to_load = gurobi_cons_to_load.intersection(set(self._solver_model.getConstrs()))
-            if self._version_major >= 5:
-                quadratic_cons_to_load = gurobi_cons_to_load.intersection(set(self._solver_model.getQConstrs()))
-        linear_vals = self._solver_model.getAttr("Pi", linear_cons_to_load)
-        if self._version_major >= 5:
-            quadratic_vals = self._solver_model.getAttr("QCPi", quadratic_cons_to_load)
+            xpress_cons_to_load = set([con_map[pyomo_con] for pyomo_con in cons_to_load])
+            linear_cons_to_load = xpress_cons_to_load.intersection(set(self._solver_model.getConstraint()))
+            linear_cons_to_load_to_str = [str(i) for i in linear_cons_to_load]
 
-        for gurobi_con, val in zip(linear_cons_to_load, linear_vals):
-            pyomo_con = reverse_con_map[gurobi_con]
+        linear_vals = self._solver_model.getDual(linear_cons_to_load)
+
+        for xpress_con, val in zip(linear_cons_to_load_to_str, linear_vals):
+            pyomo_con = reverse_con_map[xpress_con]
             dual[pyomo_con] = val
-        if self._version_major >= 5:
-            for gurobi_con, val in zip(quadratic_cons_to_load, quadratic_vals):
-                pyomo_con = reverse_con_map[gurobi_con]
-                dual[pyomo_con] = val
 
     def _load_slacks(self, cons_to_load=None):
         if not hasattr(self._pyomo_model, 'slack'):
@@ -799,22 +808,24 @@ class XpressDirect(DirectSolver):
         reverse_con_map = self._solver_con_to_pyomo_con_map
         slack = self._pyomo_model.slack
 
-        gurobi_range_con_vars = set(self._solver_model.getVars()) - set(self._pyomo_var_to_solver_var_map.values())
+        xpress_range_con_vars = set(self._solver_model.getVariable()) - set(self._pyomo_var_to_solver_var_map.values())
 
         if cons_to_load is None:
-            linear_cons_to_load = self._solver_model.getConstrs()
+            linear_cons_to_load = self._solver_model.getConstraint()
+            linear_cons_to_load_to_str = [str(i) for i in linear_cons_to_load]
         else:
-            gurobi_cons_to_load = set([con_map[pyomo_con] for pyomo_con in cons_to_load])
-            linear_cons_to_load = gurobi_cons_to_load.intersection(set(self._solver_model.getConstrs()))
-        linear_vals = self._solver_model.getAttr("Slack", linear_cons_to_load)
+            xpress_cons_to_load = set([con_map[pyomo_con] for pyomo_con in cons_to_load])
+            linear_cons_to_load = xpress_cons_to_load.intersection(set(self._solver_model.getConstraint()))
+            linear_cons_to_load_to_str = [str(i) for i in linear_cons_to_load]
+        linear_vals = self._solver_model.getSlack(linear_cons_to_load)
 
-        for gurobi_con, val in zip(linear_cons_to_load, linear_vals):
-            pyomo_con = reverse_con_map[gurobi_con]
+        for xpress_con, val in zip(linear_cons_to_load_to_str, linear_vals):
+            pyomo_con = reverse_con_map[xpress_con]
             if pyomo_con in self._range_constraints:
-                lin_expr = self._solver_model.getRow(gurobi_con)
+                lin_expr = self._solver_model.getRow(xpress_con)
                 for i in reversed(range(lin_expr.size())):
                     v = lin_expr.getVar(i)
-                    if v in gurobi_range_con_vars:
+                    if v in xpress_range_con_vars:
                         Us_ = v.X
                         Ls_ = v.UB - v.X
                         if Us_ > Ls_:
